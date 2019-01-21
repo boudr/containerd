@@ -21,6 +21,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"testing"
@@ -36,11 +38,12 @@ import (
 )
 
 var (
-	address       string
-	noDaemon      bool
-	noCriu        bool
-	supportsCriu  bool
-	testNamespace = "testing"
+	address           string
+	noDaemon          bool
+	noCriu            bool
+	supportsCriu      bool
+	testNamespace     = "testing"
+	ctrdStdioFilePath string
 
 	ctrd = &daemon{}
 )
@@ -76,13 +79,26 @@ func TestMain(m *testing.M) {
 	if !noDaemon {
 		sys.ForceRemoveAll(defaultRoot)
 
-		err := ctrd.start("containerd", address, []string{
+		stdioFile, err := ioutil.TempFile("", "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "could not create a new stdio temp file: %s\n", err)
+			os.Exit(1)
+		}
+		defer func() {
+			stdioFile.Close()
+			os.Remove(stdioFile.Name())
+		}()
+		ctrdStdioFilePath = stdioFile.Name()
+		stdioWriter := io.MultiWriter(stdioFile, buf)
+
+		err = ctrd.start("containerd", address, []string{
 			"--root", defaultRoot,
 			"--state", defaultState,
 			"--log-level", "debug",
-		}, buf, buf)
+			"--config", createShimDebugConfig(),
+		}, stdioWriter, stdioWriter)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %s", err, buf.String())
+			fmt.Fprintf(os.Stderr, "%s: %s\n", err, buf.String())
 			os.Exit(1)
 		}
 	}
@@ -111,7 +127,7 @@ func TestMain(m *testing.M) {
 	}).Info("running tests against containerd")
 
 	// pull a seed image
-	if _, err = client.Pull(ctx, testImage, WithPullUnpack, WithPlatform(platforms.Default())); err != nil {
+	if _, err = client.Pull(ctx, testImage, WithPullUnpack); err != nil {
 		ctrd.Stop()
 		ctrd.Wait()
 		fmt.Fprintf(os.Stderr, "%s: %s\n", err, buf.String())
@@ -137,6 +153,7 @@ func TestMain(m *testing.M) {
 				fmt.Fprintln(os.Stderr, "failed to wait for containerd", err)
 			}
 		}
+
 		if err := sys.ForceRemoveAll(defaultRoot); err != nil {
 			fmt.Fprintln(os.Stderr, "failed to remove test root dir", err)
 			os.Exit(1)
@@ -171,7 +188,7 @@ func TestNewClient(t *testing.T) {
 		t.Fatal("New() returned nil client")
 	}
 	if err := client.Close(); err != nil {
-		t.Errorf("client closed returned errror %v", err)
+		t.Errorf("client closed returned error %v", err)
 	}
 }
 
@@ -185,7 +202,7 @@ func TestImagePull(t *testing.T) {
 
 	ctx, cancel := testContext()
 	defer cancel()
-	_, err = client.Pull(ctx, testImage, WithPlatform(platforms.Default()))
+	_, err = client.Pull(ctx, testImage, WithPlatformMatcher(platforms.Default()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,11 +218,11 @@ func TestImagePullAllPlatforms(t *testing.T) {
 	defer cancel()
 
 	cs := client.ContentStore()
-	img, err := client.Pull(ctx, testImage)
+	img, err := client.Fetch(ctx, "docker.io/library/busybox:latest")
 	if err != nil {
 		t.Fatal(err)
 	}
-	index := img.Target()
+	index := img.Target
 	manifests, err := images.Children(ctx, cs, index)
 	if err != nil {
 		t.Fatal(err)
@@ -249,12 +266,12 @@ func TestImagePullSomePlatforms(t *testing.T) {
 		opts = append(opts, WithPlatform(platform))
 	}
 
-	img, err := client.Pull(ctx, "docker.io/library/busybox:latest", opts...)
+	img, err := client.Fetch(ctx, "k8s.gcr.io/pause:3.1", opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	index := img.Target()
+	index := img.Target
 	manifests, err := images.Children(ctx, cs, index)
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +321,7 @@ func TestImagePullSchema1(t *testing.T) {
 	ctx, cancel := testContext()
 	defer cancel()
 	schema1TestImage := "gcr.io/google_containers/pause:3.0@sha256:0d093c962a6c2dd8bb8727b661e2b5f13e9df884af9945b4cc7088d9350cd3ee"
-	_, err = client.Pull(ctx, schema1TestImage, WithPlatform(platforms.Default()), WithSchema1Conversion)
+	_, err = client.Pull(ctx, schema1TestImage, WithPlatform(platforms.DefaultString()), WithSchema1Conversion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,6 +357,22 @@ func TestClientReconnect(t *testing.T) {
 		t.Fatal("containerd is not serving")
 	}
 	if err := client.Close(); err != nil {
-		t.Errorf("client closed returned errror %v", err)
+		t.Errorf("client closed returned error %v", err)
 	}
+}
+
+func createShimDebugConfig() string {
+	f, err := ioutil.TempFile("", "containerd-config-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create config file: %s\n", err)
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString("[plugins.linux]\n\tshim_debug = true\n"); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write to config file %s: %s\n", f.Name(), err)
+		os.Exit(1)
+	}
+
+	return f.Name()
 }

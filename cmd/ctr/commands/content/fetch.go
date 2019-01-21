@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/progress"
+	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/remotes"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -56,7 +57,16 @@ not use this implementation as a guide. The end goal should be having metadata,
 content and snapshots ready for a direct use via the 'ctr run'.
 
 Most of this is experimental and there are few leaps to make this work.`,
-	Flags: append(commands.RegistryFlags, commands.LabelFlag),
+	Flags: append(commands.RegistryFlags, commands.LabelFlag,
+		cli.StringSliceFlag{
+			Name:  "platform",
+			Usage: "Pull content from a specific platform",
+		},
+		cli.BoolFlag{
+			Name:  "all-platforms",
+			Usage: "pull content from all platforms",
+		},
+	),
 	Action: func(clicontext *cli.Context) error {
 		var (
 			ref = clicontext.Args().First()
@@ -66,28 +76,61 @@ Most of this is experimental and there are few leaps to make this work.`,
 			return err
 		}
 		defer cancel()
-
-		_, err = Fetch(ctx, client, ref, clicontext)
+		config, err := NewFetchConfig(ctx, clicontext)
+		if err != nil {
+			return err
+		}
+		_, err = Fetch(ctx, client, ref, config)
 		return err
 	},
 }
 
-// Fetch loads all resources into the content store and returns the image
-func Fetch(ctx context.Context, client *containerd.Client, ref string, cliContext *cli.Context) (containerd.Image, error) {
-	resolver, err := commands.GetResolver(ctx, cliContext)
+// FetchConfig for content fetch
+type FetchConfig struct {
+	// Resolver
+	Resolver remotes.Resolver
+	// ProgressOutput to display progress
+	ProgressOutput io.Writer
+	// Labels to set on the content
+	Labels []string
+	// Platforms to fetch
+	Platforms []string
+}
+
+// NewFetchConfig returns the default FetchConfig from cli flags
+func NewFetchConfig(ctx context.Context, clicontext *cli.Context) (*FetchConfig, error) {
+	resolver, err := commands.GetResolver(ctx, clicontext)
 	if err != nil {
 		return nil, err
 	}
+	config := &FetchConfig{
+		Resolver: resolver,
+		Labels:   clicontext.StringSlice("label"),
+	}
+	if !clicontext.GlobalBool("debug") {
+		config.ProgressOutput = os.Stdout
+	}
+	if !clicontext.Bool("all-platforms") {
+		p := clicontext.StringSlice("platform")
+		if len(p) == 0 {
+			p = append(p, platforms.DefaultString())
+		}
+		config.Platforms = p
+	}
+	return config, nil
+}
 
+// Fetch loads all resources into the content store and returns the image
+func Fetch(ctx context.Context, client *containerd.Client, ref string, config *FetchConfig) (images.Image, error) {
 	ongoing := newJobs(ref)
 
 	pctx, stopProgress := context.WithCancel(ctx)
 	progress := make(chan struct{})
 
 	go func() {
-		if !cliContext.GlobalBool("debug") {
+		if config.ProgressOutput != nil {
 			// no progress bar, because it hides some debug logs
-			showProgress(pctx, ongoing, client.ContentStore(), os.Stdout)
+			showProgress(pctx, ongoing, client.ContentStore(), config.ProgressOutput)
 		}
 		close(progress)
 	}()
@@ -100,24 +143,20 @@ func Fetch(ctx context.Context, client *containerd.Client, ref string, cliContex
 	})
 
 	log.G(pctx).WithField("image", ref).Debug("fetching")
-	labels := commands.LabelArgs(cliContext.StringSlice("label"))
+	labels := commands.LabelArgs(config.Labels)
 	opts := []containerd.RemoteOpt{
 		containerd.WithPullLabels(labels),
-		containerd.WithResolver(resolver),
+		containerd.WithResolver(config.Resolver),
 		containerd.WithImageHandler(h),
 		containerd.WithSchema1Conversion,
 	}
-
-	if !cliContext.Bool("all-platforms") {
-		for _, platform := range cliContext.StringSlice("platform") {
-			opts = append(opts, containerd.WithPlatform(platform))
-		}
+	for _, platform := range config.Platforms {
+		opts = append(opts, containerd.WithPlatform(platform))
 	}
-
-	img, err := client.Pull(pctx, ref, opts...)
+	img, err := client.Fetch(pctx, ref, opts...)
 	stopProgress()
 	if err != nil {
-		return nil, err
+		return images.Image{}, err
 	}
 
 	<-progress

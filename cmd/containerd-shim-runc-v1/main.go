@@ -19,16 +19,10 @@
 package main
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/shim"
 )
 
 func main() {
-	if err := shim.Run(runc.New); err != nil {
-		fmt.Fprintf(os.Stderr, "containerd-shim-run-v1: %s\n", err)
-		os.Exit(1)
-	}
+	shim.Run("io.containerd.runc.v1", runc.New)
 }

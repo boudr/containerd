@@ -113,7 +113,7 @@ var createCommand = cli.Command{
 		cli.DurationFlag{
 			Name:  "expires, x",
 			Usage: "expiration of lease (0 value will not expire)",
-			Value: 24 * 3600 * time.Second,
+			Value: 24 * time.Hour,
 		},
 	},
 	Action: func(context *cli.Context) error {
@@ -163,6 +163,12 @@ var deleteCommand = cli.Command{
 	Usage:       "delete a lease",
 	ArgsUsage:   "[flags] <lease id> ...",
 	Description: "delete a lease",
+	Flags: []cli.Flag{
+		cli.BoolFlag{
+			Name:  "sync",
+			Usage: "Synchronously remove leases and all unreferenced resources",
+		},
+	},
 	Action: func(context *cli.Context) error {
 		var lids = context.Args()
 		if len(lids) == 0 {
@@ -175,11 +181,17 @@ var deleteCommand = cli.Command{
 		defer cancel()
 
 		ls := client.LeasesService()
-		for _, lid := range lids {
+		sync := context.Bool("sync")
+		for i, lid := range lids {
+			var opts []leases.DeleteOpt
+			if sync && i == len(lids)-1 {
+				opts = append(opts, leases.SynchronousDelete)
+			}
+
 			lease := leases.Lease{
 				ID: lid,
 			}
-			if err := ls.Delete(ctx, lease); err != nil {
+			if err := ls.Delete(ctx, lease, opts...); err != nil {
 				return err
 			}
 			fmt.Println(lid)

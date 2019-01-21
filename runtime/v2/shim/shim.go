@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/events"
+	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/ttrpc"
@@ -52,11 +53,32 @@ type Shim interface {
 	StartShim(ctx context.Context, id, containerdBinary, containerdAddress string) (string, error)
 }
 
+// OptsKey is the context key for the Opts value.
+type OptsKey struct{}
+
+// Opts are context options associated with the shim invocation.
+type Opts struct {
+	BundlePath string
+	Debug      bool
+}
+
+// BinaryOpts allows the configuration of a shims binary setup
+type BinaryOpts func(*Config)
+
+// Config of shim binary options provided by shim implementations
+type Config struct {
+	// NoSubreaper disables setting the shim as a child subreaper
+	NoSubreaper bool
+	// NoReaper disables the shim binary from reaping any child process implicitly
+	NoReaper bool
+}
+
 var (
 	debugFlag            bool
 	idFlag               string
 	namespaceFlag        string
 	socketFlag           string
+	bundlePath           string
 	addressFlag          string
 	containerdBinaryFlag string
 	action               string
@@ -67,6 +89,7 @@ func parseFlags() {
 	flag.StringVar(&namespaceFlag, "namespace", "", "namespace that owns the shim")
 	flag.StringVar(&idFlag, "id", "", "id of the task")
 	flag.StringVar(&socketFlag, "socket", "", "abstract socket path to serve")
+	flag.StringVar(&bundlePath, "bundle", "", "path to the bundle if not workdir")
 
 	flag.StringVar(&addressFlag, "address", "", "grpc address back to main containerd")
 	flag.StringVar(&containerdBinaryFlag, "publish-binary", "containerd", "path to publish binary (used for publishing events)")
@@ -82,15 +105,6 @@ func setRuntime() {
 			debug.FreeOSMemory()
 		}
 	}()
-	if debugFlag {
-		f, err := os.OpenFile("shim.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "open shim log %s", err)
-			os.Exit(1)
-		}
-		logrus.SetLevel(logrus.DebugLevel)
-		logrus.SetOutput(f)
-	}
 	if os.Getenv("GOMAXPROCS") == "" {
 		// If GOMAXPROCS hasn't been set, we default to a value of 2 to reduce
 		// the number of Go stacks present in the shim.
@@ -98,26 +112,59 @@ func setRuntime() {
 	}
 }
 
-// Run initializes and runs a shim server
-func Run(initFunc Init) error {
-	parseFlags()
-	setRuntime()
-
-	signals, err := setupSignals()
+func setLogger(ctx context.Context, id string) error {
+	logrus.SetFormatter(&logrus.TextFormatter{
+		TimestampFormat: log.RFC3339NanoFixed,
+		FullTimestamp:   true,
+	})
+	if debugFlag {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
+	f, err := openLog(ctx, id)
 	if err != nil {
 		return err
 	}
-	if err := subreaper(); err != nil {
+	logrus.SetOutput(f)
+	return nil
+}
+
+// Run initializes and runs a shim server
+func Run(id string, initFunc Init, opts ...BinaryOpts) {
+	var config Config
+	for _, o := range opts {
+		o(&config)
+	}
+	if err := run(id, initFunc, config); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", id, err)
+		os.Exit(1)
+	}
+}
+
+func run(id string, initFunc Init, config Config) error {
+	parseFlags()
+	setRuntime()
+
+	signals, err := setupSignals(config)
+	if err != nil {
 		return err
+	}
+	if !config.NoSubreaper {
+		if err := subreaper(); err != nil {
+			return err
+		}
 	}
 	publisher := &remoteEventsPublisher{
 		address:              addressFlag,
 		containerdBinaryPath: containerdBinaryFlag,
+		noReaper:             config.NoReaper,
 	}
 	if namespaceFlag == "" {
 		return fmt.Errorf("shim namespace cannot be empty")
 	}
 	ctx := namespaces.WithNamespace(context.Background(), namespaceFlag)
+	ctx = context.WithValue(ctx, OptsKey{}, Opts{BundlePath: bundlePath, Debug: debugFlag})
+	ctx = log.WithLogger(ctx, log.G(ctx).WithField("runtime", id))
+
 	service, err := initFunc(ctx, idFlag, publisher)
 	if err != nil {
 		return err
@@ -151,6 +198,9 @@ func Run(initFunc Init) error {
 		}
 		return nil
 	default:
+		if err := setLogger(ctx, idFlag); err != nil {
+			return err
+		}
 		client := NewShimClient(ctx, service, signals)
 		return client.Serve()
 	}
@@ -234,4 +284,5 @@ func dumpStacks(logger *logrus.Entry) {
 type remoteEventsPublisher struct {
 	address              string
 	containerdBinaryPath string
+	noReaper             bool
 }

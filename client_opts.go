@@ -17,7 +17,10 @@
 package containerd
 
 import (
+	"time"
+
 	"github.com/containerd/containerd/images"
+	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/containerd/remotes"
 	"google.golang.org/grpc"
 )
@@ -27,6 +30,7 @@ type clientOpts struct {
 	defaultRuntime string
 	services       *services
 	dialOptions    []grpc.DialOption
+	timeout        time.Duration
 }
 
 // ClientOpt allows callers to set options on the containerd client
@@ -70,12 +74,23 @@ func WithServices(opts ...ServicesOpt) ClientOpt {
 	}
 }
 
+// WithTimeout sets the connection timeout for the client
+func WithTimeout(d time.Duration) ClientOpt {
+	return func(c *clientOpts) error {
+		c.timeout = d
+		return nil
+	}
+}
+
 // RemoteOpt allows the caller to set distribution options for a remote
 type RemoteOpt func(*Client, *RemoteContext) error
 
 // WithPlatform allows the caller to specify a platform to retrieve
 // content for
 func WithPlatform(platform string) RemoteOpt {
+	if platform == "" {
+		platform = platforms.DefaultString()
+	}
 	return func(_ *Client, c *RemoteContext) error {
 		for _, p := range c.Platforms {
 			if p == platform {
@@ -84,6 +99,16 @@ func WithPlatform(platform string) RemoteOpt {
 		}
 
 		c.Platforms = append(c.Platforms, platform)
+		return nil
+	}
+}
+
+// WithPlatformMatcher specifies the matcher to use for
+// determining which platforms to pull content for.
+// This value supersedes anything set with `WithPlatform`.
+func WithPlatformMatcher(m platforms.MatchComparer) RemoteOpt {
+	return func(_ *Client, c *RemoteContext) error {
+		c.PlatformMatcher = m
 		return nil
 	}
 }

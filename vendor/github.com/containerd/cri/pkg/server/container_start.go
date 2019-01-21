@@ -108,7 +108,17 @@ func (c *criService) startContainer(ctx context.Context,
 		return cntr.IO, nil
 	}
 
-	task, err := container.NewTask(ctx, ioCreation)
+	ctrInfo, err := container.Info(ctx)
+	if err != nil {
+		return errors.Wrap(err, "failed to get container info")
+	}
+
+	var taskOpts []containerd.NewTaskOpts
+	// TODO(random-liu): Remove this after shim v1 is deprecated.
+	if c.config.NoPivot && ctrInfo.Runtime.Name == linuxRuntime {
+		taskOpts = append(taskOpts, containerd.WithNoPivotRoot)
+	}
+	task, err := container.NewTask(ctx, ioCreation, taskOpts...)
 	if err != nil {
 		return errors.Wrap(err, "failed to create containerd task")
 	}

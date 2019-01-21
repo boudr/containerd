@@ -35,7 +35,9 @@ import (
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/content/testsuite"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/pkg/testutil"
+
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/assert"
@@ -173,7 +175,9 @@ func TestContentWriter(t *testing.T) {
 
 	// now, attempt to write the same data again
 	checkCopy(t, int64(len(p)), cw, bufio.NewReader(ioutil.NopCloser(bytes.NewReader(p))))
-	if err := cw.Commit(ctx, int64(len(p)), expected); err != nil {
+	if err := cw.Commit(ctx, int64(len(p)), expected); err == nil {
+		t.Fatal("expected already exists error")
+	} else if !errdefs.IsAlreadyExists(err) {
 		t.Fatal(err)
 	}
 
@@ -391,4 +395,25 @@ func setupIncompleteWrite(ctx context.Context, t *testing.T, cs content.Store, r
 	assert.NilError(t, err)
 
 	assert.NilError(t, writer.Close())
+}
+
+func TestWriteReadEmptyFileTimestamp(t *testing.T) {
+	root, err := ioutil.TempDir("", "test-write-read-file-timestamp")
+	if err != nil {
+		t.Errorf("failed to create a tmp dir: %v", err)
+	}
+	defer os.RemoveAll(root)
+
+	emptyFile := filepath.Join(root, "updatedat")
+	if err := writeTimestampFile(emptyFile, time.Time{}); err != nil {
+		t.Errorf("failed to write Zero Time to file: %v", err)
+	}
+
+	timestamp, err := readFileTimestamp(emptyFile)
+	if err != nil {
+		t.Errorf("read empty timestamp file should success, but got error: %v", err)
+	}
+	if !timestamp.IsZero() {
+		t.Errorf("read empty timestamp file should return time.Time{}, but got: %v", timestamp)
+	}
 }

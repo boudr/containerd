@@ -50,7 +50,7 @@ type snapshotter struct {
 // New creates a new snapshotter using aufs
 func New(root string) (snapshots.Snapshotter, error) {
 	if err := supported(); err != nil {
-		return nil, err
+		return nil, errors.Wrap(plugin.ErrSkipPlugin, err.Error())
 	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (o *snapshotter) Usage(ctx context.Context, key string) (snapshots.Usage, e
 	t.Rollback() // transaction no longer needed at this point.
 
 	if info.Kind == snapshots.KindActive {
-		du, err := fs.DiskUsage(upperPath)
+		du, err := fs.DiskUsage(ctx, upperPath)
 		if err != nil {
 			// TODO(stevvooe): Consider not reporting an error in this case.
 			return snapshots.Usage{}, err
@@ -174,7 +174,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 		return err
 	}
 
-	usage, err := fs.DiskUsage(o.upperPath(id))
+	usage, err := fs.DiskUsage(ctx, o.upperPath(id))
 	if err != nil {
 		return err
 	}

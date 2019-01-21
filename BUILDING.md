@@ -46,6 +46,7 @@ need to satisfy this dependencies in your system:
 
 If you're building with seccomp, you'll need to install it with the following:
 
+* CentOS/Fedora: `yum install libseccomp-devel`
 * Debian/Ubuntu: `apt install libseccomp-dev`
 
 At this point you are ready to build `containerd` yourself!
@@ -175,7 +176,7 @@ RUN apt-get update && \
 
 ```
 
-In our Docker container we will use a specific `runc` build which includes [seccomp](https://en.wikipedia.org/wiki/seccomp) and [apparmor](https://en.wikipedia.org/wiki/AppArmor) support. Hence why our Dockerfile includes `libseccomp-dev` as a dependency (apparmor support doesn't require external libaries). Please refer to [RUNC.md](/RUNC.md) for the currently supported version of `runc` that is used by containerd.
+In our Docker container we will use a specific `runc` build which includes [seccomp](https://en.wikipedia.org/wiki/seccomp) and [apparmor](https://en.wikipedia.org/wiki/AppArmor) support. Hence why our Dockerfile includes `libseccomp-dev` as a dependency (apparmor support doesn't require external libraries). Please refer to [RUNC.md](/RUNC.md) for the currently supported version of `runc` that is used by containerd.
 
 Let's suppose you build an image called `containerd/build` from the above Dockerfile. You can run the following command:
 

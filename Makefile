@@ -71,8 +71,8 @@ TEST_REQUIRES_ROOT_PACKAGES=$(filter \
     )
 
 # Project binaries.
-COMMANDS=ctr containerd containerd-stress containerd-release
-MANPAGES=ctr.1 containerd.1 config.toml.5 containerd-config.1
+COMMANDS=ctr containerd containerd-stress
+MANPAGES=ctr.1 containerd.1 containerd-config.1 containerd-config.toml.5
 
 # Build tags seccomp and apparmor are needed by CRI plugin.
 BUILDTAGS ?= seccomp apparmor
@@ -116,11 +116,11 @@ AUTHORS: .mailmap .git/HEAD
 
 generate: protos
 	@echo "$(WHALE) $@"
-	@PATH=${ROOTDIR}/bin:${PATH} go generate -x ${PACKAGES}
+	@PATH="${ROOTDIR}/bin:${PATH}" go generate -x ${PACKAGES}
 
 protos: bin/protoc-gen-gogoctrd ## generate protobuf
 	@echo "$(WHALE) $@"
-	@PATH=${ROOTDIR}/bin:${PATH} protobuild --quiet ${PACKAGES}
+	@PATH="${ROOTDIR}/bin:${PATH}" protobuild --quiet ${PACKAGES}
 
 check-protos: protos ## check if protobufs needs to be generated again
 	@echo "$(WHALE) $@"
@@ -175,6 +175,10 @@ bin/containerd-shim: cmd/containerd-shim FORCE # set !cgo and omit pie for a sta
 bin/containerd-shim-runc-v1: cmd/containerd-shim-runc-v1 FORCE # set !cgo and omit pie for a static shim build: https://github.com/golang/go/issues/17789#issuecomment-258542220
 	@echo "$(WHALE) bin/containerd-shim-runc-v1"
 	@CGO_ENABLED=0 go build ${GO_BUILD_FLAGS} -o bin/containerd-shim-runc-v1 ${SHIM_GO_LDFLAGS} ${GO_TAGS} ./cmd/containerd-shim-runc-v1
+
+bin/containerd-shim-runhcs-v1: cmd/containerd-shim-runhcs-v1 FORCE # set !cgo and omit pie for a static shim build: https://github.com/golang/go/issues/17789#issuecomment-258542220
+	@echo "$(WHALE) bin/containerd-shim-runhcs-v1${BINARY_SUFFIX}"
+	@CGO_ENABLED=0 go build ${GO_BUILD_FLAGS} -o bin/containerd-shim-runhcs-v1${BINARY_SUFFIX} ${SHIM_GO_LDFLAGS} ${GO_TAGS} ./cmd/containerd-shim-runhcs-v1
 
 binaries: $(BINARIES) ## build binaries
 	@echo "$(WHALE) $@"

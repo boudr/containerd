@@ -30,7 +30,7 @@ import (
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/pkg/testutil"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
-	"github.com/containerd/containerd/services/server"
+	srvconfig "github.com/containerd/containerd/services/server/config"
 )
 
 // the following nolint is for shutting up gometalinter on non-linux.
@@ -42,7 +42,7 @@ func newDaemonWithConfig(t *testing.T, configTOML string) (*Client, *daemon, fun
 	testutil.RequiresRoot(t)
 	var (
 		ctrd              = daemon{}
-		configTOMLDecoded server.Config
+		configTOMLDecoded srvconfig.Config
 		buf               = bytes.NewBuffer(nil)
 	)
 
@@ -61,7 +61,7 @@ func newDaemonWithConfig(t *testing.T, configTOML string) (*Client, *daemon, fun
 		t.Fatal(err)
 	}
 
-	if err = server.LoadConfig(configTOMLFile, &configTOMLDecoded); err != nil {
+	if err = srvconfig.LoadConfig(configTOMLFile, &configTOMLDecoded); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,10 +109,10 @@ func newDaemonWithConfig(t *testing.T, configTOML string) (*Client, *daemon, fun
 		// cleaning config-specific resources is up to the caller
 	}
 	return client, &ctrd, cleanup
-
 }
 
-func testDaemonRuntimeRoot(t *testing.T, noShim bool) {
+// TestDaemonRuntimeRoot ensures plugin.linux.runtime_root is not ignored
+func TestDaemonRuntimeRoot(t *testing.T) {
 	runtimeRoot, err := ioutil.TempDir("", "containerd-test-runtime-root")
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func testDaemonRuntimeRoot(t *testing.T, noShim bool) {
 	}
 
 	id := t.Name()
-	container, err := client.NewContainer(ctx, id, WithNewSpec(oci.WithImageConfig(image), withProcessArgs("top")), WithNewSnapshot(id, image), WithRuntime("io.containerd.runc.v1", &options.Options{
+	container, err := client.NewContainer(ctx, id, WithNewSnapshot(id, image), WithNewSpec(oci.WithImageConfig(image), withProcessArgs("top")), WithRuntime("io.containerd.runc.v1", &options.Options{
 		Root: runtimeRoot,
 	}))
 	if err != nil {
@@ -154,7 +154,8 @@ func testDaemonRuntimeRoot(t *testing.T, noShim bool) {
 	}
 	defer task.Delete(ctx)
 
-	if err = task.Start(ctx); err != nil {
+	status, err := task.Wait(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,23 +164,8 @@ func testDaemonRuntimeRoot(t *testing.T, noShim bool) {
 		t.Errorf("error while getting stat for %s: %v", stateJSONPath, err)
 	}
 
-	finishedC, err := task.Wait(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err = task.Kill(ctx, syscall.SIGKILL); err != nil {
 		t.Error(err)
 	}
-	<-finishedC
-}
-
-// TestDaemonRuntimeRoot ensures plugin.linux.runtime_root is not ignored
-func TestDaemonRuntimeRoot(t *testing.T) {
-	testDaemonRuntimeRoot(t, false)
-}
-
-// TestDaemonRuntimeRootNoShim ensures plugin.linux.runtime_root is not ignored when no_shim is true
-func TestDaemonRuntimeRootNoShim(t *testing.T) {
-	t.Skip("no_shim is not functional now: https://github.com/containerd/containerd/issues/2181")
-	testDaemonRuntimeRoot(t, true)
+	<-status
 }
